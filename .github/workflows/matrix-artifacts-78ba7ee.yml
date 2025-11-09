@@ -2,51 +2,50 @@ name: Matrix Build with Artifacts (78ba7ee)
 
 on:
   push:
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build:
-    # 3+ parallel jobs across OS variants; Node fixed just to show a second dimension
-    name: Build (${{ matrix.os }}, node ${{ matrix.node }})
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [18]
+        node: [16, 18, 20]  # 3 variants (runs in parallel)
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Setup Node
+      # Required identifier
+      - name: matrix-78ba7ee
+        run: echo "Building for Node ${{ matrix.node }}"
+
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
 
-      - name: matrix-78ba7ee
-        run: echo "Matrix run on ${{ matrix.os }} with Node ${{ matrix.node }}"
-
-      - name: Generate build artifact (non-empty)
+      - name: Generate artifact file (non-empty)
         run: |
-          node -e "const fs=require('fs'); const os=require('os'); const lines=[
-            'Build artifact for matrix run:',
-            `MatrixOS=${{ toJson(matrix.os) }}`,
-            `MatrixNode=${{ toJson(matrix.node) }}`,
-            `Runner=${process.env.RUNNER_NAME||''}`,
-            `Platform=${process.platform}`,
-            `Arch=${process.arch}`,
-            `Timestamp=${new Date().toISOString()}`
-          ]; fs.writeFileSync('output.txt', lines.join(os.EOL));"
+          mkdir -p dist
+          {
+            echo "Build for Node ${{ matrix.node }}"
+            echo "Date: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            echo "Repository: $GITHUB_REPOSITORY"
+            echo "Run ID: $GITHUB_RUN_ID"
+            echo "Commit: $GITHUB_SHA"
+          } > "dist/output-${{ matrix.node }}.txt"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          # Required prefix and unique per matrix variant
-          name: build-78ba7ee-${{ matrix.os }}-node${{ matrix.node }}
-          path: output.txt
+          # Must use this prefix
+          name: build-78ba7ee-node${{ matrix.node }}
+          path: dist/output-${{ matrix.node }}.txt
           if-no-files-found: error
 
   verify:
-    name: Verify artifacts (non-empty)
+    name: Verify artifacts (non-empty and >=3)
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -58,19 +57,18 @@ jobs:
       - name: List downloaded artifacts
         run: ls -R artifacts
 
-      - name: Assert each artifact is non-empty and at least 3 exist
+      - name: Assert each artifact is non-empty and count >= 3
         shell: bash
         run: |
           set -euo pipefail
-          count=0
-          while IFS= read -r -d '' f; do
+          mapfile -d '' files < <(find artifacts -type f -name 'output-*.txt' -print0)
+          echo "Found ${#files[@]} files"
+          [ "${#files[@]}" -ge 3 ]
+          for f in "${files[@]}"; do
             if [ -s "$f" ]; then
-              echo "OK: $f ($(wc -c <"$f") bytes)"
-              count=$((count+1))
+              echo "OK: $f (bytes: $(wc -c <"$f"))"
             else
               echo "EMPTY: $f"
               exit 1
             fi
-          done < <(find artifacts -type f -name 'output.txt' -print0)
-          echo "Found $count non-empty artifacts"
-          [ "$count" -ge 3 ]
+          done
